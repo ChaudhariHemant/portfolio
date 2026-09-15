@@ -1,0 +1,75 @@
+name: CI/CD for Frontend
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci;
+          else
+            npm install;
+          fi
+
+      - name: Run tests
+        run: |
+          if ls **/*.spec.ts 1> /dev/null 2>&1 || ls **/*.test.ts 1> /dev/null 2>&1; then
+            npm test;
+          else
+            echo 'No tests found, skipping test step.';
+          fi
+
+      - name: Build project
+        run: npm run build
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Verify Vercel secrets
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo '::error::Missing VERCEL_TOKEN or VERCEL_PROJECT_ID';
+            exit 1;
+          fi
+
+      - name: Upload files to Vercel
+        run: |
+          for file in $(git ls-files); do
+            sha=$(git hash-object $file);
+            curl -X PUT https://api.vercel.com/v2/files \
+              -H 'Authorization: Bearer $VERCEL_TOKEN' \
+              -F file=@$file \
+              -F "x-vercel-digest=$sha";
+          done
+
+      - name: Deploy to Vercel
+        run: |
+          curl -X POST https://api.vercel.com/v13/deployments?teamId=$VERCEL_ORG_ID \
+            -H 'Authorization: Bearer $VERCEL_TOKEN' \
+            -d '{"project":"$VERCEL_PROJECT_ID","files":[{"file":"frontend/index.html","sha":"$(git hash-object frontend/index.html)"}]}';
